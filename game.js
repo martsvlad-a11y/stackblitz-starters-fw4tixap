@@ -3,465 +3,543 @@ const config = {
   parent: 'game',
   width: 390,
   height: 844,
-  backgroundColor: '#0f1112',
+  backgroundColor: '#0d0f10',
   scale: {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: { create },
+  scene: { create, update },
 };
 
 new Phaser.Game(config);
 
+let prisoner;
+let target = { x: 195, y: 520 };
+let currentRoom = 'CELL';
+let roomObjects = [];
+let locationText;
+let hintText;
+let targetMarker;
+let moving = false;
+let walkPhase = 0;
+
+const rooms = ['CELL', 'YARD', 'GYM', 'LIBRARY', 'CAFETERIA', 'WORK'];
+
 function create() {
   const scene = this;
 
-  let player = {
-    day: 0,
-    health: 100,
-    strength: 20,
-    respect: 10,
-    money: 0,
-  };
+  drawShell(scene);
+  prisoner = drawPrisoner(scene, 195, 520);
+  prisoner.setDepth(50);
 
-  drawCell(scene);
-  const prisoner = drawPrisoner(scene, 224, 330);
-
-  // Soft idle animation so the character feels alive.
-  scene.tweens.add({
-    targets: prisoner,
-    y: prisoner.y - 1.8,
-    duration: 1300,
-    yoyo: true,
-    repeat: -1,
-    ease: 'Sine.InOut',
-  });
-
-  scene.add.text(22, 24, 'PRISON 365', {
+  locationText = scene.add.text(20, 52, '', {
     fontFamily: 'Arial',
-    fontSize: '13px',
-    color: '#9da39f',
+    fontSize: '26px',
+    color: '#f0eee6',
     fontStyle: 'bold',
-    letterSpacing: 2,
-  });
+  }).setDepth(100);
 
-  const dayText = scene.add.text(22, 47, '', {
+  hintText = scene.add.text(20, 86, 'Tap anywhere on the floor to move.', {
     fontFamily: 'Arial',
-    fontSize: '29px',
-    color: '#f3f1e9',
-    fontStyle: 'bold',
+    fontSize: '11px',
+    color: '#8c938e',
+  }).setDepth(100);
+
+  drawNavigation(scene);
+  renderRoom(scene, 'CELL');
+
+  scene.input.on('pointerdown', (pointer) => {
+    // Bottom navigation is UI, not walkable space.
+    if (pointer.y >= 610 || pointer.y <= 115) return;
+
+    target.x = Phaser.Math.Clamp(pointer.x, 42, 348);
+    target.y = Phaser.Math.Clamp(pointer.y, 270, 575);
+    moving = true;
+
+    if (targetMarker) targetMarker.destroy();
+    targetMarker = scene.add.circle(target.x, target.y, 9, 0xd8c791, 0.18)
+      .setStrokeStyle(1, 0xd8c791, 0.45)
+      .setDepth(8);
+
+    scene.tweens.add({
+      targets: targetMarker,
+      alpha: 0,
+      scale: 1.9,
+      duration: 500,
+      onComplete: () => {
+        if (targetMarker) {
+          targetMarker.destroy();
+          targetMarker = null;
+        }
+      },
+    });
   });
+}
 
-  scene.add.text(22, 82, 'CELL B-17  •  NORTH WING', {
-    fontFamily: 'Arial',
-    fontSize: '10px',
-    color: '#777e79',
-    letterSpacing: 1,
-  });
+function update(time, delta) {
+  if (!prisoner || !moving) return;
 
-  // Lower information panel.
-  const panel = scene.add.graphics();
-  panel.fillStyle(0x121516, 0.98);
-  panel.fillRoundedRect(14, 468, 362, 354, 18);
-  panel.lineStyle(1, 0x2b3030, 1);
-  panel.strokeRoundedRect(14, 468, 362, 354, 18);
+  const dx = target.x - prisoner.x;
+  const dy = target.y - prisoner.y;
+  const distance = Math.hypot(dx, dy);
 
-  scene.add.text(28, 489, 'TODAY', {
-    fontFamily: 'Arial',
-    fontSize: '10px',
-    color: '#747b76',
-    fontStyle: 'bold',
-    letterSpacing: 1.5,
-  });
+  if (distance < 4) {
+    prisoner.x = target.x;
+    prisoner.y = target.y;
+    moving = false;
+    prisoner.rotation = 0;
+    return;
+  }
 
-  const eventText = scene.add.text(28, 510, 'Your sentence begins today.', {
-    fontFamily: 'Arial',
-    fontSize: '15px',
-    color: '#e0ded6',
-    wordWrap: { width: 334 },
-    lineSpacing: 5,
-  });
+  const speed = 122;
+  const step = Math.min((speed * delta) / 1000, distance);
+  prisoner.x += (dx / distance) * step;
+  prisoner.y += (dy / distance) * step;
 
-  const statText = scene.add.text(28, 571, '', {
+  if (Math.abs(dx) > 3) prisoner.scaleX = dx < 0 ? -1 : 1;
+
+  walkPhase += delta * 0.018;
+  prisoner.rotation = Math.sin(walkPhase) * 0.012;
+}
+
+function drawShell(scene) {
+  const g = scene.add.graphics().setDepth(90);
+  g.fillStyle(0x0c0e0f, 1);
+  g.fillRect(0, 0, 390, 118);
+  g.fillStyle(0x101314, 1);
+  g.fillRect(0, 610, 390, 234);
+  g.lineStyle(1, 0x292e2d, 1);
+  g.lineBetween(0, 117, 390, 117);
+  g.lineBetween(0, 610, 390, 610);
+
+  scene.add.text(20, 20, 'PRISON 365', {
     fontFamily: 'Arial',
     fontSize: '12px',
-    color: '#b8bdb9',
-    lineSpacing: 8,
-  });
+    color: '#9ba19d',
+    fontStyle: 'bold',
+    letterSpacing: 2,
+  }).setDepth(100);
 
-  createButton(scene, 105, 697, 'YARD', 'Fresh air. More risk.', () => {
-    player.respect += random(-2, 5);
-    if (chance(0.18)) {
-      player.health -= random(8, 25);
-      setEvent('A fight breaks out in the yard. You get caught in it.');
-    } else {
-      setEvent('You spend an hour outside. The cold air feels almost normal.');
-    }
-    advanceDay();
-  });
+  scene.add.text(370, 21, 'DAY 0 / 365', {
+    fontFamily: 'Arial',
+    fontSize: '10px',
+    color: '#6f7672',
+  }).setOrigin(1, 0).setDepth(100);
+}
 
-  createButton(scene, 285, 697, 'GYM', 'Strength up.', () => {
-    player.strength += random(1, 4);
-    player.health -= random(0, 4);
-    setEvent('You train until your arms shake, then shower before lock-up.');
-    advanceDay();
-  });
+function drawNavigation(scene) {
+  scene.add.text(20, 628, 'MOVE THROUGH THE PRISON', {
+    fontFamily: 'Arial',
+    fontSize: '9px',
+    color: '#676e69',
+    fontStyle: 'bold',
+    letterSpacing: 1.2,
+  }).setDepth(100);
 
-  createButton(scene, 105, 767, 'WORK', 'Earn a little.', () => {
-    player.money += random(2, 8);
-    setEvent('Another shift. Boring work, but boredom can be useful in here.');
-    advanceDay();
-  });
+  const positions = [
+    [70, 681], [195, 681], [320, 681],
+    [70, 758], [195, 758], [320, 758],
+  ];
 
-  createButton(scene, 285, 767, 'CELL', 'Rest and recover.', () => {
-    player.health = Math.min(100, player.health + random(2, 8));
-    setEvent('You stay in, read for a while, and let the noise of the wing fade.');
-    advanceDay();
-  });
+  rooms.forEach((room, i) => {
+    const [x, y] = positions[i];
+    const bg = scene.add.rectangle(x, y, 110, 56, 0x1a1e1d)
+      .setStrokeStyle(1, 0x353b38)
+      .setInteractive({ useHandCursor: true })
+      .setDepth(100);
 
-  function advanceDay() {
-    player.day++;
+    const icon = roomIcon(room);
+    scene.add.text(x, y - 8, icon, {
+      fontFamily: 'Arial',
+      fontSize: '17px',
+      color: '#d3d0c5',
+    }).setOrigin(0.5).setDepth(101);
 
-    if (player.day >= 365) {
-      setEvent('Day 365. The lock turns from the other side. You made it.');
-    }
+    scene.add.text(x, y + 13, room, {
+      fontFamily: 'Arial',
+      fontSize: '9px',
+      color: '#aeb4af',
+      fontStyle: 'bold',
+    }).setOrigin(0.5).setDepth(101);
 
-    if (player.health <= 0) {
-      die();
-      return;
-    }
-
-    updateUI();
-  }
-
-  function die() {
-    const deathDay = player.day;
-
-    eventText.setText(`YOU DIED ON DAY ${deathDay}.\n\nThe sentence starts again.`);
-
-    scene.cameras.main.flash(500, 95, 20, 20);
-
-    scene.time.delayedCall(900, () => {
-      player = { day: 0, health: 100, strength: 20, respect: 10, money: 0 };
-      updateUI();
+    bg.on('pointerover', () => bg.setFillStyle(0x262b29));
+    bg.on('pointerout', () => bg.setFillStyle(currentRoom === room ? 0x2b302d : 0x1a1e1d));
+    bg.on('pointerdown', () => {
+      currentRoom = room;
+      renderRoom(scene, room);
+      rooms.forEach(() => {});
     });
-  }
 
-  function setEvent(text) {
-    eventText.setText(text);
-  }
+    bg.roomName = room;
+    roomObjects.push({ permanentNav: true, object: bg });
+  });
+}
 
-  function updateUI() {
-    dayText.setText(`DAY ${player.day} / 365`);
-    statText.setText(
-      `HEALTH      ${String(player.health).padStart(3, ' ')}     ` +
-      `STRENGTH   ${String(player.strength).padStart(3, ' ')}\n` +
-      `RESPECT     ${String(player.respect).padStart(3, ' ')}     ` +
-      `MONEY      $${player.money}`
-    );
-  }
+function roomIcon(room) {
+  return {
+    CELL: '▣',
+    YARD: '☁',
+    GYM: '◆',
+    LIBRARY: '▤',
+    CAFETERIA: '●',
+    WORK: '⚙',
+  }[room];
+}
 
-  updateUI();
+function clearRoom() {
+  roomObjects
+    .filter((item) => !item.permanentNav)
+    .forEach((item) => item.object.destroy());
+  roomObjects = roomObjects.filter((item) => item.permanentNav);
+}
+
+function addRoomObject(object) {
+  roomObjects.push({ permanentNav: false, object });
+  return object;
+}
+
+function renderRoom(scene, room) {
+  clearRoom();
+  moving = false;
+
+  const spawns = {
+    CELL: [205, 505],
+    YARD: [195, 520],
+    GYM: [195, 520],
+    LIBRARY: [195, 520],
+    CAFETERIA: [195, 530],
+    WORK: [195, 530],
+  };
+
+  prisoner.setPosition(...spawns[room]);
+  target = { x: prisoner.x, y: prisoner.y };
+
+  const subtitles = {
+    CELL: 'CELL B-17  •  NORTH WING',
+    YARD: 'RECREATION YARD  •  BLOCK B',
+    GYM: 'WEIGHT ROOM  •  WEST WING',
+    LIBRARY: 'LIBRARY  •  EDUCATION UNIT',
+    CAFETERIA: 'MESS HALL  •  GROUND FLOOR',
+    WORK: 'LAUNDRY  •  INDUSTRIAL UNIT',
+  };
+
+  locationText.setText(room === 'CAFETERIA' ? 'MESS HALL' : room);
+  hintText.setText(subtitles[room] + '   ·   tap floor to walk');
+
+  if (room === 'CELL') drawCell(scene);
+  if (room === 'YARD') drawYard(scene);
+  if (room === 'GYM') drawGym(scene);
+  if (room === 'LIBRARY') drawLibrary(scene);
+  if (room === 'CAFETERIA') drawCafeteria(scene);
+  if (room === 'WORK') drawWork(scene);
+}
+
+function roomGraphics(scene) {
+  return addRoomObject(scene.add.graphics().setDepth(1));
+}
+
+function roomText(scene, x, y, text, style = {}) {
+  return addRoomObject(scene.add.text(x, y, text, {
+    fontFamily: 'Arial',
+    fontSize: '10px',
+    color: '#8f9691',
+    ...style,
+  }).setDepth(4));
+}
+
+function drawBaseRoom(scene, wall, floor) {
+  const g = roomGraphics(scene);
+  g.fillStyle(wall, 1);
+  g.fillRect(0, 118, 390, 492);
+  g.fillStyle(floor, 1);
+  g.fillPoints([
+    new Phaser.Geom.Point(0, 390),
+    new Phaser.Geom.Point(390, 390),
+    new Phaser.Geom.Point(390, 610),
+    new Phaser.Geom.Point(0, 610),
+  ], true);
+  g.lineStyle(1, 0xffffff, 0.035);
+  g.lineBetween(0, 390, 390, 390);
 }
 
 function drawCell(scene) {
-  const g = scene.add.graphics();
+  drawBaseRoom(scene, 0x343936, 0x222624);
+  const g = roomGraphics(scene);
 
-  // Back wall: institutional concrete, but slightly warm rather than horror-grey.
-  g.fillStyle(0x343936, 1);
-  g.fillRect(0, 0, 390, 458);
+  // Concrete block wall.
+  g.lineStyle(1, 0x464c48, 0.28);
+  for (let y = 146; y < 390; y += 42) g.lineBetween(0, y, 390, y);
+  for (let x = 65; x < 390; x += 82) g.lineBetween(x, 118, x, 390);
 
-  // Subtle concrete bands.
-  g.lineStyle(1, 0x414743, 0.34);
-  for (let y = 116; y < 430; y += 42) g.lineBetween(0, y, 390, y);
-  for (let x = 54; x < 390; x += 84) g.lineBetween(x, 116, x, 430);
+  // Window and bars.
+  g.fillStyle(0x76909a, 1);
+  g.fillRect(255, 151, 86, 91);
+  g.fillStyle(0xd2b36d, 0.12);
+  g.fillRect(255, 151, 86, 91);
+  g.lineStyle(4, 0x242928, 1);
+  g.strokeRect(247, 143, 102, 107);
+  [268, 291, 314, 337].forEach((x) => g.lineBetween(x, 151, x, 242));
 
-  // Ceiling shadow.
-  g.fillStyle(0x161a19, 0.6);
-  g.fillRect(0, 105, 390, 14);
-
-  // Floor with perspective.
-  g.fillStyle(0x232724, 1);
-  g.fillPoints([
-    new Phaser.Geom.Point(0, 389),
-    new Phaser.Geom.Point(390, 389),
-    new Phaser.Geom.Point(390, 458),
-    new Phaser.Geom.Point(0, 458),
-  ], true);
-  g.lineStyle(1, 0x303530, 0.7);
-  g.lineBetween(0, 423, 390, 423);
-  g.lineBetween(91, 389, 70, 458);
-  g.lineBetween(198, 389, 198, 458);
-  g.lineBetween(307, 389, 327, 458);
-
-  // High security window.
-  g.fillStyle(0x171e20, 1);
-  g.fillRect(246, 133, 105, 108);
-  g.fillStyle(0x7895a0, 1);
-  g.fillRect(254, 141, 89, 92);
-  g.fillStyle(0xd6b36f, 0.18);
-  g.fillRect(254, 141, 89, 92);
-
-  g.lineStyle(5, 0x262b2b, 1);
-  g.strokeRect(246, 133, 105, 108);
-  g.lineStyle(3, 0x2d3333, 1);
-  [267, 289, 311, 333].forEach((x) => g.lineBetween(x, 141, x, 233));
-  g.lineBetween(254, 186, 343, 186);
-
-  // Warm light cast from the window.
-  g.fillStyle(0xd5b16d, 0.065);
-  g.fillPoints([
-    new Phaser.Geom.Point(254, 233),
-    new Phaser.Geom.Point(343, 233),
-    new Phaser.Geom.Point(390, 420),
-    new Phaser.Geom.Point(227, 420),
-  ], true);
-
-  drawBed(scene, 25, 282);
-  drawDesk(scene, 20, 180);
-  drawSinkToilet(scene, 307, 303);
-  drawShelfAndPhotos(scene);
-
-  // Heavy cell door edge at far right.
-  g.fillStyle(0x202423, 1);
-  g.fillRect(367, 112, 23, 277);
-  g.lineStyle(2, 0x4a504c, 1);
-  g.lineBetween(367, 112, 367, 389);
-
-  // Tiny warm ceiling fixture.
-  g.fillStyle(0xd9c892, 0.9);
-  g.fillRoundedRect(151, 112, 88, 8, 3);
-  g.fillStyle(0xe6d79f, 0.05);
-  g.fillEllipse(195, 206, 260, 210);
-}
-
-function drawBed(scene, x, y) {
-  const g = scene.add.graphics();
-
-  // Shadow under bed.
-  g.fillStyle(0x080a09, 0.35);
-  g.fillEllipse(x + 94, y + 112, 190, 28);
-
-  // Steel frame.
-  g.lineStyle(5, 0x171b1a, 1);
-  g.strokeRoundedRect(x, y, 173, 67, 4);
-  g.lineBetween(x + 8, y + 67, x + 8, y + 111);
-  g.lineBetween(x + 165, y + 67, x + 165, y + 111);
-
-  // Mattress.
-  g.fillStyle(0x777b71, 1);
-  g.fillRoundedRect(x + 5, y + 9, 163, 48, 5);
-
-  // Blanket – desaturated olive gives the room a lived-in feel.
+  // Bed.
+  g.fillStyle(0x171b1a, 1);
+  g.fillRect(22, 332, 170, 12);
+  g.fillRect(28, 344, 6, 90);
+  g.fillRect(179, 344, 6, 90);
+  g.fillStyle(0x777b70, 1);
+  g.fillRoundedRect(25, 300, 164, 42, 5);
   g.fillStyle(0x596358, 1);
-  g.fillRoundedRect(x + 8, y + 18, 115, 37, 4);
-  g.lineStyle(1, 0x6e796d, 0.55);
-  g.lineBetween(x + 22, y + 21, x + 22, y + 53);
-  g.lineBetween(x + 72, y + 21, x + 72, y + 53);
+  g.fillRoundedRect(30, 307, 105, 31, 4);
+  g.fillStyle(0xbab8ae, 1);
+  g.fillRoundedRect(142, 307, 40, 25, 7);
 
-  // Pillow.
-  g.fillStyle(0xc2c0b5, 1);
-  g.fillRoundedRect(x + 127, y + 16, 34, 26, 8);
+  // Desk / stool.
+  g.fillStyle(0x484d48, 1);
+  g.fillRect(25, 212, 116, 10);
+  g.fillRect(35, 222, 5, 63);
+  g.fillRect(128, 222, 5, 63);
+  g.fillStyle(0x302f28, 1);
+  g.fillRect(40, 201, 38, 8);
+  g.fillStyle(0xbcb5a2, 1);
+  g.fillRect(83, 204, 31, 5);
 
-  // Storage drawer beneath.
-  g.fillStyle(0x313633, 1);
-  g.fillRect(x + 29, y + 72, 108, 28);
-  g.lineStyle(1, 0x4a504d, 1);
-  g.strokeRect(x + 29, y + 72, 108, 28);
-  g.lineBetween(x + 77, y + 86, x + 89, y + 86);
-}
-
-function drawDesk(scene, x, y) {
-  const g = scene.add.graphics();
-
-  // Wall-mounted steel desk.
-  g.fillStyle(0x474c47, 1);
-  g.fillRect(x, y, 126, 11);
-  g.fillStyle(0x292d2a, 1);
-  g.fillRect(x + 9, y + 11, 5, 60);
-  g.fillRect(x + 111, y + 11, 5, 60);
-
-  // Book + paper + mug.
-  g.fillStyle(0x846f4d, 1);
-  g.fillRect(x + 14, y - 8, 40, 8);
-  g.fillStyle(0xc6c0aa, 1);
-  g.fillRect(x + 59, y - 5, 34, 5);
-  g.fillStyle(0x8d9994, 1);
-  g.fillRoundedRect(x + 101, y - 15, 15, 15, 3);
-
-  // Simple fixed stool.
-  g.fillStyle(0x333835, 1);
-  g.fillRoundedRect(x + 43, y + 78, 44, 9, 3);
-  g.fillRect(x + 61, y + 87, 6, 32);
-}
-
-function drawSinkToilet(scene, x, y) {
-  const g = scene.add.graphics();
-
-  // Stainless steel sink.
-  g.fillStyle(0x7f8988, 1);
-  g.fillRoundedRect(x - 6, y - 78, 66, 40, 8);
-  g.fillStyle(0x4f5958, 1);
-  g.fillEllipse(x + 27, y - 60, 37, 15);
-  g.fillStyle(0xa7afad, 1);
-  g.fillRect(x + 20, y - 92, 14, 15);
-  g.fillRect(x + 7, y - 87, 13, 5);
-
-  // Combined prison toilet below.
+  // Sink / toilet.
+  g.fillStyle(0x838c8a, 1);
+  g.fillRoundedRect(310, 292, 56, 35, 7);
+  g.fillStyle(0x4b5553, 1);
+  g.fillEllipse(338, 309, 34, 12);
   g.fillStyle(0x858e8d, 1);
-  g.fillRoundedRect(x, y - 29, 55, 59, 13);
-  g.fillStyle(0x434b4a, 1);
-  g.fillEllipse(x + 27, y - 13, 37, 19);
-  g.lineStyle(2, 0xaab1af, 0.55);
-  g.strokeEllipse(x + 27, y - 13, 37, 19);
+  g.fillRoundedRect(315, 342, 48, 57, 12);
+  g.fillStyle(0x454d4c, 1);
+  g.fillEllipse(339, 358, 31, 16);
+
+  // Photos and shelf for cozy contrast.
+  g.fillStyle(0x252a27, 1);
+  g.fillRect(35, 167, 110, 5);
+  g.fillStyle(0x8d7650, 1);
+  g.fillRect(47, 149, 10, 18);
+  g.fillStyle(0x697b83, 1);
+  g.fillRect(63, 153, 10, 14);
+  g.fillStyle(0xc9bc99, 1);
+  g.fillRect(177, 170, 29, 35);
+  g.fillStyle(0x9c927a, 1);
+  g.fillRect(215, 177, 24, 29);
+
+  roomText(scene, 28, 445, 'YOUR CELL', { color: '#656c67', fontStyle: 'bold' });
 }
 
-function drawShelfAndPhotos(scene) {
-  const g = scene.add.graphics();
+function drawYard(scene) {
+  drawBaseRoom(scene, 0x88979a, 0x565d57);
+  const g = roomGraphics(scene);
 
-  // Shelf with toiletries/books.
-  g.fillStyle(0x252a27, 1);
-  g.fillRect(37, 142, 127, 6);
-  g.fillStyle(0x8f7651, 1);
-  g.fillRect(48, 121, 11, 21);
-  g.fillStyle(0x687a83, 1);
-  g.fillRect(62, 126, 10, 16);
-  g.fillStyle(0x5f6e5f, 1);
-  g.fillRect(76, 118, 12, 24);
-  g.fillStyle(0x8c5450, 1);
-  g.fillRect(96, 123, 8, 19);
+  // Sky.
+  g.fillStyle(0x849ba5, 1);
+  g.fillRect(0, 118, 390, 208);
+  g.fillStyle(0xb7c4c5, 0.45);
+  g.fillEllipse(74, 181, 114, 26);
+  g.fillEllipse(288, 159, 132, 22);
 
-  // Personal photos / postcards: enough warmth without turning the cell into a bedroom.
-  g.fillStyle(0xcbbf9d, 1);
-  g.fillRect(176, 146, 31, 37);
-  g.fillStyle(0x958b75, 1);
-  g.fillRect(181, 151, 21, 17);
-  g.fillStyle(0xaca38c, 1);
-  g.fillRect(215, 155, 23, 29);
-  g.fillStyle(0x66716c, 1);
-  g.fillRect(219, 159, 15, 12);
+  // Prison walls.
+  g.fillStyle(0x747a74, 1);
+  g.fillRect(0, 287, 390, 104);
+  g.lineStyle(2, 0x666c67, 0.7);
+  for (let x = 0; x < 390; x += 55) g.lineBetween(x, 287, x, 390);
+  g.lineBetween(0, 337, 390, 337);
 
-  // Pencil marks / calendar tally.
-  g.lineStyle(1, 0x7d827c, 0.6);
-  for (let i = 0; i < 5; i++) g.lineBetween(184 + i * 4, 210, 184 + i * 4, 227);
-  g.lineBetween(182, 225, 203, 211);
+  // Fence.
+  g.lineStyle(2, 0x343a38, 0.9);
+  for (let x = 8; x < 390; x += 18) g.lineBetween(x, 254, x, 351);
+  g.lineBetween(0, 260, 390, 260);
+  g.lineBetween(0, 347, 390, 347);
+
+  // Basketball hoop.
+  g.fillStyle(0x363b38, 1);
+  g.fillRect(305, 352, 6, 105);
+  g.fillStyle(0xc7c4b8, 1);
+  g.fillRect(274, 339, 67, 42);
+  g.lineStyle(3, 0x8d5439, 1);
+  g.strokeCircle(308, 385, 18);
+
+  // Bench.
+  g.fillStyle(0x424945, 1);
+  g.fillRect(38, 474, 116, 12);
+  g.fillRect(48, 486, 7, 35);
+  g.fillRect(136, 486, 7, 35);
+
+  roomText(scene, 26, 566, 'Cold air. Open sky. Everyone watches everyone.', { color: '#c9cfca' });
+}
+
+function drawGym(scene) {
+  drawBaseRoom(scene, 0x303633, 0x202422);
+  const g = roomGraphics(scene);
+
+  // High windows.
+  for (let i = 0; i < 4; i++) {
+    g.fillStyle(0x667e88, 1);
+    g.fillRect(25 + i * 92, 142, 68, 49);
+    g.lineStyle(3, 0x242928, 1);
+    g.strokeRect(25 + i * 92, 142, 68, 49);
+  }
+
+  // Weight rack.
+  g.fillStyle(0x3f4541, 1);
+  g.fillRect(24, 256, 108, 10);
+  g.fillRect(34, 266, 6, 104);
+  g.fillRect(116, 266, 6, 104);
+  [0, 1, 2].forEach((i) => {
+    g.fillStyle(0x181b1a, 1);
+    g.fillCircle(53 + i * 28, 298, 16 - i * 2);
+    g.fillCircle(53 + i * 28, 338, 13 - i);
+  });
+
+  // Bench press.
+  g.fillStyle(0x4a514c, 1);
+  g.fillRect(195, 407, 118, 14);
+  g.fillRect(208, 421, 7, 64);
+  g.fillRect(292, 421, 7, 64);
+  g.fillStyle(0x1b1e1d, 1);
+  g.fillRect(175, 372, 160, 6);
+  g.fillCircle(180, 375, 19);
+  g.fillCircle(330, 375, 19);
+
+  // Pull-up bars.
+  g.lineStyle(6, 0x3e4541, 1);
+  g.lineBetween(326, 232, 326, 355);
+  g.lineBetween(368, 232, 368, 355);
+  g.lineBetween(326, 242, 368, 242);
+
+  roomText(scene, 25, 561, 'WEIGHTS  •  PULL-UP BARS  •  BENCH PRESS', { color: '#6e7670' });
+}
+
+function drawLibrary(scene) {
+  drawBaseRoom(scene, 0x5a5548, 0x302d27);
+  const g = roomGraphics(scene);
+
+  // Warm ceiling lights.
+  g.fillStyle(0xe0c986, 0.16);
+  g.fillEllipse(195, 235, 360, 190);
+  g.fillStyle(0xdbca96, 1);
+  g.fillRoundedRect(127, 132, 136, 7, 3);
+
+  // Bookcases.
+  [18, 267].forEach((x) => {
+    g.fillStyle(0x3d3328, 1);
+    g.fillRect(x, 183, 105, 225);
+    for (let y = 222; y <= 370; y += 49) g.fillRect(x + 6, y, 93, 6);
+    const colors = [0x75534b, 0x596a58, 0x716249, 0x4d6269, 0x846b52];
+    for (let row = 0; row < 4; row++) {
+      for (let i = 0; i < 7; i++) {
+        g.fillStyle(colors[(row + i) % colors.length], 1);
+        g.fillRect(x + 10 + i * 12, 194 + row * 49, 9, 25 + ((i + row) % 8));
+      }
+    }
+  });
+
+  // Reading table.
+  g.fillStyle(0x574a39, 1);
+  g.fillRoundedRect(137, 361, 116, 59, 5);
+  g.fillStyle(0x3b3228, 1);
+  g.fillRect(149, 420, 7, 70);
+  g.fillRect(234, 420, 7, 70);
+  g.fillStyle(0xb8aa83, 1);
+  g.fillRect(164, 350, 53, 7);
+
+  roomText(scene, 131, 293, 'QUIET AREA', { color: '#b9ae8d', fontSize: '9px' });
+}
+
+function drawCafeteria(scene) {
+  drawBaseRoom(scene, 0x9a998c, 0x5a5a52);
+  const g = roomGraphics(scene);
+
+  // Service hatch.
+  g.fillStyle(0x4b504c, 1);
+  g.fillRect(38, 161, 314, 93);
+  g.fillStyle(0x1c201f, 1);
+  g.fillRect(50, 172, 290, 61);
+  g.fillStyle(0x9da39e, 1);
+  g.fillRect(50, 236, 290, 11);
+
+  // Tables.
+  const tables = [[87, 377], [292, 377], [87, 505], [292, 505]];
+  tables.forEach(([x, y]) => {
+    g.fillStyle(0x777d77, 1);
+    g.fillRoundedRect(x - 61, y - 20, 122, 40, 8);
+    g.fillStyle(0x444a46, 1);
+    g.fillRect(x - 4, y + 20, 8, 48);
+    g.fillStyle(0x606661, 1);
+    g.fillRoundedRect(x - 82, y - 13, 16, 28, 4);
+    g.fillRoundedRect(x + 66, y - 13, 16, 28, 4);
+  });
+
+  roomText(scene, 50, 267, 'BREAKFAST 06:30  •  LUNCH 12:00  •  DINNER 17:30', { color: '#5b615d' });
+}
+
+function drawWork(scene) {
+  drawBaseRoom(scene, 0x555b57, 0x353936);
+  const g = roomGraphics(scene);
+
+  // Industrial pipes.
+  g.lineStyle(9, 0x3b4140, 1);
+  g.lineBetween(22, 154, 365, 154);
+  g.lineBetween(342, 154, 342, 258);
+
+  // Washers/dryers.
+  [28, 140, 252].forEach((x) => {
+    g.fillStyle(0x727b78, 1);
+    g.fillRoundedRect(x, 246, 94, 125, 8);
+    g.fillStyle(0x1c2120, 1);
+    g.fillCircle(x + 47, 309, 32);
+    g.lineStyle(5, 0xa0aaa5, 0.65);
+    g.strokeCircle(x + 47, 309, 32);
+    g.fillStyle(0x242827, 1);
+    g.fillRect(x + 14, 259, 66, 13);
+  });
+
+  // Folding table and baskets.
+  g.fillStyle(0x777d77, 1);
+  g.fillRect(73, 448, 246, 13);
+  g.fillStyle(0x474c49, 1);
+  g.fillRect(89, 461, 8, 85);
+  g.fillRect(295, 461, 8, 85);
+  g.fillStyle(0x887b64, 1);
+  g.fillRoundedRect(21, 490, 70, 46, 7);
+  g.fillRoundedRect(302, 490, 68, 46, 7);
+
+  roomText(scene, 21, 561, 'LAUNDRY SHIFT  •  LOW PAY  •  LOW TROUBLE', { color: '#747c77' });
 }
 
 function drawPrisoner(scene, x, y) {
   const c = scene.add.container(x, y);
 
-  // Ground shadow.
-  const shadow = scene.add.ellipse(0, 67, 58, 14, 0x080a09, 0.4);
-
-  // Legs / shoes.
-  const leftLeg = scene.add.rectangle(-13, 34, 18, 52, 0x394341).setOrigin(0.5, 0);
-  const rightLeg = scene.add.rectangle(13, 34, 18, 52, 0x394341).setOrigin(0.5, 0);
-  const leftShoe = scene.add.ellipse(-14, 85, 27, 11, 0x171a19);
-  const rightShoe = scene.add.ellipse(14, 85, 27, 11, 0x171a19);
-
-  // Torso – muted blue/grey institutional uniform, less cartoony than bright orange.
-  const torso = scene.add.rectangle(0, -3, 55, 78, 0x596865).setOrigin(0.5);
-  torso.setStrokeStyle(1, 0x76827e);
-
-  // Shirt collar / undershirt.
-  const undershirt = scene.add.triangle(0, -38, -9, 0, 9, 0, 0, 15, 0xc0bcb0);
-
-  // Arms.
-  const leftArm = scene.add.rectangle(-36, 4, 15, 65, 0x53625f).setAngle(6);
-  const rightArm = scene.add.rectangle(36, 4, 15, 65, 0x53625f).setAngle(-6);
-  const leftHand = scene.add.circle(-39, 37, 8, 0xb98c70);
-  const rightHand = scene.add.circle(39, 37, 8, 0xb98c70);
-
-  // Neck + head.
-  const neck = scene.add.rectangle(0, -51, 17, 18, 0xb98c70);
-  const head = scene.add.ellipse(0, -77, 41, 49, 0xc89a79);
-
-  // Ears.
-  const earL = scene.add.circle(-21, -76, 5, 0xb9896c);
-  const earR = scene.add.circle(21, -76, 5, 0xb9896c);
-
-  // Hair with a slightly irregular silhouette.
-  const hair = scene.add.graphics();
-  hair.fillStyle(0x2b2926, 1);
-  hair.fillEllipse(0, -91, 40, 22);
-  hair.fillRect(-19, -92, 7, 17);
-  hair.fillRect(12, -92, 7, 15);
-
-  // Facial features.
-  const eyeL = scene.add.ellipse(-8, -78, 3.5, 2.5, 0x262626);
-  const eyeR = scene.add.ellipse(8, -78, 3.5, 2.5, 0x262626);
-  const browL = scene.add.rectangle(-8, -84, 10, 1.5, 0x4a382e).setAngle(-5);
-  const browR = scene.add.rectangle(8, -84, 10, 1.5, 0x4a382e).setAngle(5);
-  const nose = scene.add.rectangle(0, -72, 2, 7, 0xa9765f);
-  const mouth = scene.add.rectangle(0, -64, 12, 1.5, 0x744f45);
-
-  // Inmate ID patch.
-  const patch = scene.add.rectangle(14, -17, 20, 11, 0xc6c0aa);
-  const patchText = scene.add.text(14, -17, 'B17', {
+  const shadow = scene.add.ellipse(0, 55, 54, 13, 0x070909, 0.32);
+  const leftLeg = scene.add.rectangle(-11, 20, 15, 39, 0x3b4542).setOrigin(0.5, 0);
+  const rightLeg = scene.add.rectangle(11, 20, 15, 39, 0x3b4542).setOrigin(0.5, 0);
+  const leftShoe = scene.add.ellipse(-12, 62, 23, 9, 0x171918);
+  const rightShoe = scene.add.ellipse(12, 62, 23, 9, 0x171918);
+  const torso = scene.add.rectangle(0, -12, 45, 60, 0x5b6662).setOrigin(0.5);
+  const shirtBand = scene.add.rectangle(0, 4, 45, 4, 0x46504d);
+  const leftArm = scene.add.rectangle(-28, -9, 11, 47, 0x59635f).setRotation(0.04);
+  const rightArm = scene.add.rectangle(28, -9, 11, 47, 0x59635f).setRotation(-0.04);
+  const leftHand = scene.add.circle(-29, 14, 6, 0xb58e70);
+  const rightHand = scene.add.circle(29, 14, 6, 0xb58e70);
+  const neck = scene.add.rectangle(0, -47, 12, 12, 0xb58e70);
+  const head = scene.add.ellipse(0, -67, 34, 42, 0xbf9675);
+  const hair = scene.add.arc(0, -75, 17, 190, 350, false, 0x2b2925);
+  const leftEye = scene.add.circle(-6, -67, 1.4, 0x2a2926);
+  const rightEye = scene.add.circle(6, -67, 1.4, 0x2a2926);
+  const nose = scene.add.line(0, -62, 0, 0, 2, 6, 0x8f6e58).setLineWidth(1);
+  const id = scene.add.text(0, -14, 'B17', {
     fontFamily: 'Arial',
-    fontSize: '6px',
-    color: '#303431',
+    fontSize: '7px',
+    color: '#d4d6cf',
     fontStyle: 'bold',
   }).setOrigin(0.5);
 
   c.add([
-    shadow,
-    leftLeg,
-    rightLeg,
-    leftShoe,
-    rightShoe,
-    leftArm,
-    rightArm,
-    leftHand,
-    rightHand,
-    torso,
-    undershirt,
-    neck,
-    earL,
-    earR,
-    head,
-    hair,
-    eyeL,
-    eyeR,
-    browL,
-    browR,
-    nose,
-    mouth,
-    patch,
-    patchText,
+    shadow, leftLeg, rightLeg, leftShoe, rightShoe, torso, shirtBand,
+    leftArm, rightArm, leftHand, rightHand, neck, head, hair,
+    leftEye, rightEye, nose, id,
   ]);
 
+  c.setSize(72, 145);
   return c;
-}
-
-function createButton(scene, x, y, label, sublabel, callback) {
-  const bg = scene.add
-    .rectangle(x, y, 158, 54, 0x222726)
-    .setStrokeStyle(1, 0x3d4541)
-    .setInteractive({ useHandCursor: true });
-
-  scene.add.text(x, y - 7, label, {
-    fontFamily: 'Arial',
-    fontSize: '13px',
-    fontStyle: 'bold',
-    color: '#f0eee7',
-  }).setOrigin(0.5);
-
-  scene.add.text(x, y + 11, sublabel, {
-    fontFamily: 'Arial',
-    fontSize: '8px',
-    color: '#7d8580',
-  }).setOrigin(0.5);
-
-  bg.on('pointerover', () => bg.setFillStyle(0x303735));
-  bg.on('pointerout', () => bg.setFillStyle(0x222726));
-  bg.on('pointerdown', callback);
-}
-
-function random(min, max) {
-  return Phaser.Math.Between(min, max);
-}
-
-function chance(probability) {
-  return Math.random() < probability;
 }
