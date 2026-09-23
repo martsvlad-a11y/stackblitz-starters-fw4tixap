@@ -1,545 +1,361 @@
 const config = {
   type: Phaser.AUTO,
   parent: 'game',
-  width: 390,
-  height: 844,
-  backgroundColor: '#0d0f10',
+  width: 960,
+  height: 540,
+  backgroundColor: '#101314',
   scale: {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: { create, update },
+  scene: { create },
 };
 
 new Phaser.Game(config);
 
-let prisoner;
-let target = { x: 195, y: 520 };
-let currentRoom = 'CELL';
-let roomObjects = [];
-let locationText;
-let hintText;
-let targetMarker;
-let moving = false;
-let walkPhase = 0;
-
-const rooms = ['CELL', 'YARD', 'GYM', 'LIBRARY', 'CAFETERIA', 'WORK'];
+const ROOMS = [
+  { key: 'CELL', label: 'CELL' },
+  { key: 'YARD', label: 'YARD' },
+  { key: 'GYM', label: 'GYM' },
+  { key: 'LIBRARY', label: 'LIBRARY' },
+  { key: 'MESS', label: 'MESS HALL' },
+  { key: 'WORK', label: 'WORK' },
+];
 
 function create() {
   const scene = this;
+  let currentRoom = 'CELL';
+  let roomLayer;
+  let player;
+  let moveTween;
 
-  drawShell(scene);
-  prisoner = drawPrisoner(scene, 195, 520);
-  prisoner.setDepth(50);
+  const uiLayer = scene.add.container(0, 0).setDepth(100);
 
-  locationText = scene.add.text(20, 52, '', {
-    fontFamily: 'Arial',
-    fontSize: '26px',
-    color: '#f0eee6',
-    fontStyle: 'bold',
-  }).setDepth(100);
+  const title = scene.add.text(28, 19, 'PRISON 365', {
+    fontFamily: 'Arial', fontSize: '15px', color: '#a8aea9', fontStyle: 'bold'
+  });
+  uiLayer.add(title);
 
-  hintText = scene.add.text(20, 86, 'Tap anywhere on the floor to move.', {
-    fontFamily: 'Arial',
-    fontSize: '11px',
-    color: '#8c938e',
-  }).setDepth(100);
+  const dayText = scene.add.text(28, 44, 'DAY 0 / 365', {
+    fontFamily: 'Arial', fontSize: '30px', color: '#f3efe3', fontStyle: 'bold'
+  });
+  uiLayer.add(dayText);
 
-  drawNavigation(scene);
-  renderRoom(scene, 'CELL');
+  const roomText = scene.add.text(930, 31, '', {
+    fontFamily: 'Arial', fontSize: '13px', color: '#9ca29e', fontStyle: 'bold'
+  }).setOrigin(1, 0.5);
+  uiLayer.add(roomText);
+
+  const hint = scene.add.text(480, 452, 'TAP THE FLOOR TO WALK', {
+    fontFamily: 'Arial', fontSize: '11px', color: '#777f7a', fontStyle: 'bold'
+  }).setOrigin(0.5);
+  uiLayer.add(hint);
+
+  buildNav();
+  loadRoom('CELL');
 
   scene.input.on('pointerdown', (pointer) => {
-    // Bottom navigation is UI, not walkable space.
-    if (pointer.y >= 610 || pointer.y <= 115) return;
+    if (pointer.y >= 442) return;
+    if (!player) return;
 
-    target.x = Phaser.Math.Clamp(pointer.x, 42, 348);
-    target.y = Phaser.Math.Clamp(pointer.y, 270, 575);
-    moving = true;
+    const targetX = Phaser.Math.Clamp(pointer.x, 72, 888);
+    const targetY = Phaser.Math.Clamp(pointer.y, 260, 408);
+    walkTo(targetX, targetY);
+  });
 
-    if (targetMarker) targetMarker.destroy();
-    targetMarker = scene.add.circle(target.x, target.y, 9, 0xd8c791, 0.18)
-      .setStrokeStyle(1, 0xd8c791, 0.45)
-      .setDepth(8);
+  function buildNav() {
+    const bar = scene.add.graphics();
+    bar.fillStyle(0x0d1011, 0.98);
+    bar.fillRect(0, 466, 960, 74);
+    bar.lineStyle(1, 0x2c3230, 1);
+    bar.lineBetween(0, 466, 960, 466);
+    uiLayer.add(bar);
 
-    scene.tweens.add({
-      targets: targetMarker,
-      alpha: 0,
-      scale: 1.9,
-      duration: 500,
+    const gap = 8;
+    const width = 142;
+    const total = ROOMS.length * width + (ROOMS.length - 1) * gap;
+    const startX = (960 - total) / 2;
+
+    ROOMS.forEach((room, i) => {
+      const x = startX + i * (width + gap) + width / 2;
+      const button = scene.add.rectangle(x, 503, width, 46, 0x1d2220)
+        .setStrokeStyle(1, 0x39413d)
+        .setInteractive({ useHandCursor: true });
+
+      const label = scene.add.text(x, 503, room.label, {
+        fontFamily: 'Arial', fontSize: room.key === 'LIBRARY' || room.key === 'MESS' ? '11px' : '12px',
+        color: '#d8dbd5', fontStyle: 'bold'
+      }).setOrigin(0.5);
+
+      button.on('pointerover', () => button.setFillStyle(0x303733));
+      button.on('pointerout', () => button.setFillStyle(room.key === currentRoom ? 0x465149 : 0x1d2220));
+      button.on('pointerdown', (pointer, localX, localY, event) => {
+        if (event && event.stopPropagation) event.stopPropagation();
+        if (room.key !== currentRoom) loadRoom(room.key);
+      });
+
+      button.roomKey = room.key;
+      uiLayer.add([button, label]);
+    });
+  }
+
+  function refreshNav() {
+    uiLayer.list.forEach((obj) => {
+      if (obj.roomKey) {
+        obj.setFillStyle(obj.roomKey === currentRoom ? 0x465149 : 0x1d2220);
+      }
+    });
+  }
+
+  function loadRoom(key) {
+    currentRoom = key;
+    if (moveTween) moveTween.stop();
+    if (roomLayer) roomLayer.destroy(true);
+
+    roomLayer = scene.add.container(0, 0).setDepth(1);
+    drawRoom(scene, roomLayer, key);
+
+    player = drawPrisoner(scene, 480, 365);
+    roomLayer.add(player);
+
+    roomText.setText(roomName(key));
+    refreshNav();
+
+    scene.cameras.main.fadeIn(180, 10, 12, 12);
+  }
+
+  function walkTo(x, y) {
+    if (moveTween) moveTween.stop();
+
+    const dx = x - player.x;
+    const distance = Phaser.Math.Distance.Between(player.x, player.y, x, y);
+    const duration = Phaser.Math.Clamp(distance * 3.1, 120, 1300);
+
+    if (Math.abs(dx) > 4) player.setScale(dx < 0 ? -1 : 1, 1);
+
+    player.walking = true;
+    moveTween = scene.tweens.add({
+      targets: player,
+      x,
+      y,
+      duration,
+      ease: 'Linear',
+      onUpdate: () => animateWalk(player),
       onComplete: () => {
-        if (targetMarker) {
-          targetMarker.destroy();
-          targetMarker = null;
-        }
+        player.walking = false;
+        player.bodyParts.leftLeg.rotation = 0;
+        player.bodyParts.rightLeg.rotation = 0;
+        player.bodyParts.leftArm.rotation = 0;
+        player.bodyParts.rightArm.rotation = 0;
       },
     });
-  });
-}
-
-function update(time, delta) {
-  if (!prisoner || !moving) return;
-
-  const dx = target.x - prisoner.x;
-  const dy = target.y - prisoner.y;
-  const distance = Math.hypot(dx, dy);
-
-  if (distance < 4) {
-    prisoner.x = target.x;
-    prisoner.y = target.y;
-    moving = false;
-    prisoner.rotation = 0;
-    return;
   }
-
-  const speed = 122;
-  const step = Math.min((speed * delta) / 1000, distance);
-  prisoner.x += (dx / distance) * step;
-  prisoner.y += (dy / distance) * step;
-
-  if (Math.abs(dx) > 3) prisoner.scaleX = dx < 0 ? -1 : 1;
-
-  walkPhase += delta * 0.018;
-  prisoner.rotation = Math.sin(walkPhase) * 0.012;
 }
 
-function drawShell(scene) {
-  const g = scene.add.graphics().setDepth(90);
-  g.fillStyle(0x0c0e0f, 1);
-  g.fillRect(0, 0, 390, 118);
-  g.fillStyle(0x101314, 1);
-  g.fillRect(0, 610, 390, 234);
-  g.lineStyle(1, 0x292e2d, 1);
-  g.lineBetween(0, 117, 390, 117);
-  g.lineBetween(0, 610, 390, 610);
-
-  scene.add.text(20, 20, 'PRISON 365', {
-    fontFamily: 'Arial',
-    fontSize: '12px',
-    color: '#9ba19d',
-    fontStyle: 'bold',
-    letterSpacing: 2,
-  }).setDepth(100);
-
-  scene.add.text(370, 21, 'DAY 0 / 365', {
-    fontFamily: 'Arial',
-    fontSize: '10px',
-    color: '#6f7672',
-  }).setOrigin(1, 0).setDepth(100);
-}
-
-function drawNavigation(scene) {
-  scene.add.text(20, 628, 'MOVE THROUGH THE PRISON', {
-    fontFamily: 'Arial',
-    fontSize: '9px',
-    color: '#676e69',
-    fontStyle: 'bold',
-    letterSpacing: 1.2,
-  }).setDepth(100);
-
-  const positions = [
-    [70, 681], [195, 681], [320, 681],
-    [70, 758], [195, 758], [320, 758],
-  ];
-
-  rooms.forEach((room, i) => {
-    const [x, y] = positions[i];
-    const bg = scene.add.rectangle(x, y, 110, 56, 0x1a1e1d)
-      .setStrokeStyle(1, 0x353b38)
-      .setInteractive({ useHandCursor: true })
-      .setDepth(100);
-
-    const icon = roomIcon(room);
-    scene.add.text(x, y - 8, icon, {
-      fontFamily: 'Arial',
-      fontSize: '17px',
-      color: '#d3d0c5',
-    }).setOrigin(0.5).setDepth(101);
-
-    scene.add.text(x, y + 13, room, {
-      fontFamily: 'Arial',
-      fontSize: '9px',
-      color: '#aeb4af',
-      fontStyle: 'bold',
-    }).setOrigin(0.5).setDepth(101);
-
-    bg.on('pointerover', () => bg.setFillStyle(0x262b29));
-    bg.on('pointerout', () => bg.setFillStyle(currentRoom === room ? 0x2b302d : 0x1a1e1d));
-    bg.on('pointerdown', () => {
-      currentRoom = room;
-      renderRoom(scene, room);
-      rooms.forEach(() => {});
-    });
-
-    bg.roomName = room;
-    roomObjects.push({ permanentNav: true, object: bg });
-  });
-}
-
-function roomIcon(room) {
+function roomName(key) {
   return {
-    CELL: '▣',
-    YARD: '☁',
-    GYM: '◆',
-    LIBRARY: '▤',
-    CAFETERIA: '●',
-    WORK: '⚙',
-  }[room];
-}
-
-function clearRoom() {
-  roomObjects
-    .filter((item) => !item.permanentNav)
-    .forEach((item) => item.object.destroy());
-  roomObjects = roomObjects.filter((item) => item.permanentNav);
-}
-
-function addRoomObject(object) {
-  roomObjects.push({ permanentNav: false, object });
-  return object;
-}
-
-function renderRoom(scene, room) {
-  clearRoom();
-  moving = false;
-
-  const spawns = {
-    CELL: [205, 505],
-    YARD: [195, 520],
-    GYM: [195, 520],
-    LIBRARY: [195, 520],
-    CAFETERIA: [195, 530],
-    WORK: [195, 530],
-  };
-
-  prisoner.setPosition(...spawns[room]);
-  target = { x: prisoner.x, y: prisoner.y };
-
-  const subtitles = {
     CELL: 'CELL B-17  •  NORTH WING',
-    YARD: 'RECREATION YARD  •  BLOCK B',
-    GYM: 'WEIGHT ROOM  •  WEST WING',
-    LIBRARY: 'LIBRARY  •  EDUCATION UNIT',
-    CAFETERIA: 'MESS HALL  •  GROUND FLOOR',
-    WORK: 'LAUNDRY  •  INDUSTRIAL UNIT',
-  };
-
-  locationText.setText(room === 'CAFETERIA' ? 'MESS HALL' : room);
-  hintText.setText(subtitles[room] + '   ·   tap floor to walk');
-
-  if (room === 'CELL') drawCell(scene);
-  if (room === 'YARD') drawYard(scene);
-  if (room === 'GYM') drawGym(scene);
-  if (room === 'LIBRARY') drawLibrary(scene);
-  if (room === 'CAFETERIA') drawCafeteria(scene);
-  if (room === 'WORK') drawWork(scene);
+    YARD: 'RECREATION YARD',
+    GYM: 'WEIGHT ROOM',
+    LIBRARY: 'PRISON LIBRARY',
+    MESS: 'MESS HALL',
+    WORK: 'LAUNDRY WORKSHOP',
+  }[key];
 }
 
-function roomGraphics(scene) {
-  return addRoomObject(scene.add.graphics().setDepth(1));
+function drawRoom(scene, layer, key) {
+  const g = scene.add.graphics();
+  layer.add(g);
+
+  g.fillStyle(0x222725, 1);
+  g.fillRect(0, 95, 960, 347);
+  g.fillStyle(0x171b19, 1);
+  g.fillRect(0, 365, 960, 77);
+  g.lineStyle(1, 0x303632, 0.8);
+  g.lineBetween(0, 365, 960, 365);
+
+  if (key === 'CELL') drawCell(scene, layer, g);
+  if (key === 'YARD') drawYard(scene, layer, g);
+  if (key === 'GYM') drawGym(scene, layer, g);
+  if (key === 'LIBRARY') drawLibrary(scene, layer, g);
+  if (key === 'MESS') drawMess(scene, layer, g);
+  if (key === 'WORK') drawWork(scene, layer, g);
 }
 
-function roomText(scene, x, y, text, style = {}) {
-  return addRoomObject(scene.add.text(x, y, text, {
-    fontFamily: 'Arial',
-    fontSize: '10px',
-    color: '#8f9691',
-    ...style,
-  }).setDepth(4));
+function drawCell(scene, layer, g) {
+  g.fillStyle(0x343a37, 1); g.fillRect(0, 95, 960, 270);
+  for (let y = 130; y < 360; y += 45) { g.lineStyle(1, 0x454b47, 0.35); g.lineBetween(0, y, 960, y); }
+
+  // Window
+  g.fillStyle(0x77909a, 1); g.fillRect(665, 130, 165, 125);
+  g.fillStyle(0xd8b267, 0.12); g.fillRect(665, 130, 165, 125);
+  g.lineStyle(8, 0x222726, 1); g.strokeRect(665, 130, 165, 125);
+  g.lineStyle(4, 0x2a302e, 1);
+  [700, 740, 780].forEach(x => g.lineBetween(x, 132, x, 252));
+  g.lineBetween(668, 193, 827, 193);
+
+  // Bed
+  g.fillStyle(0x151817, 1); g.fillRoundedRect(60, 274, 250, 18, 5);
+  g.fillStyle(0x747970, 1); g.fillRoundedRect(66, 240, 238, 40, 7);
+  g.fillStyle(0x58635a, 1); g.fillRoundedRect(69, 249, 150, 28, 6);
+  g.fillStyle(0xc3c0b4, 1); g.fillRoundedRect(244, 246, 52, 25, 8);
+  g.fillStyle(0x181b1a, 1); g.fillRect(75, 292, 8, 62); g.fillRect(286, 292, 8, 62);
+
+  // Desk
+  g.fillStyle(0x555b56, 1); g.fillRect(350, 225, 170, 12);
+  g.fillRect(365, 237, 8, 83); g.fillRect(497, 237, 8, 83);
+  g.fillStyle(0xb0a98d, 1); g.fillRect(385, 216, 55, 7);
+  g.fillStyle(0x8f7450, 1); g.fillRect(446, 211, 42, 12);
+  g.fillStyle(0x3f4642, 1); g.fillRoundedRect(404, 322, 68, 12, 4); g.fillRect(434, 334, 8, 30);
+
+  // Sink + toilet
+  g.fillStyle(0x8a9391, 1); g.fillRoundedRect(844, 246, 80, 44, 9);
+  g.fillStyle(0x4b5452, 1); g.fillEllipse(884, 268, 46, 16);
+  g.fillStyle(0x8b9492, 1); g.fillRoundedRect(854, 305, 64, 59, 16);
+  g.fillStyle(0x424947, 1); g.fillEllipse(886, 321, 43, 20);
+
+  // Personal details
+  g.fillStyle(0xcbbf9d, 1); g.fillRect(563, 163, 34, 43);
+  g.fillStyle(0x8e8774, 1); g.fillRect(569, 170, 22, 19);
+  g.fillStyle(0x252a27, 1); g.fillRect(110, 155, 190, 8);
+  [126, 148, 171, 199].forEach((x, i) => { g.fillStyle([0x8e7652,0x667982,0x66705f,0x8c5650][i],1); g.fillRect(x, 126 + i%2*7, 14, 29 - i%2*7); });
 }
 
-function drawBaseRoom(scene, wall, floor) {
-  const g = roomGraphics(scene);
-  g.fillStyle(wall, 1);
-  g.fillRect(0, 118, 390, 492);
-  g.fillStyle(floor, 1);
-  g.fillPoints([
-    new Phaser.Geom.Point(0, 390),
-    new Phaser.Geom.Point(390, 390),
-    new Phaser.Geom.Point(390, 610),
-    new Phaser.Geom.Point(0, 610),
-  ], true);
-  g.lineStyle(1, 0xffffff, 0.035);
-  g.lineBetween(0, 390, 390, 390);
+function drawYard(scene, layer, g) {
+  g.fillStyle(0x667781, 1); g.fillRect(0, 95, 960, 145);
+  g.fillStyle(0x8c8d82, 1); g.fillRect(0, 240, 960, 125);
+  g.lineStyle(2, 0xc6c9bf, 0.28);
+  for (let x = 0; x < 960; x += 38) g.lineBetween(x, 97, x, 242);
+  for (let y = 115; y < 240; y += 34) g.lineBetween(0, y, 960, y);
+  g.fillStyle(0x4a5049, 1); g.fillRect(0, 350, 960, 92);
+
+  // Basketball hoop and court
+  g.lineStyle(5, 0x333936, 1); g.lineBetween(160, 173, 160, 326);
+  g.fillStyle(0xd4d2c7, 1); g.fillRect(120, 180, 82, 49);
+  g.lineStyle(3, 0x9f5f45, 1); g.strokeCircle(161, 237, 19);
+  g.lineStyle(2, 0xd2d5cd, 0.45); g.strokeCircle(230, 353, 63); g.lineBetween(230, 290, 230, 415);
+
+  // Benches / fence shadows
+  g.fillStyle(0x292e2b, 1); g.fillRect(650, 316, 180, 14); g.fillRect(670, 330, 9, 38); g.fillRect(802, 330, 9, 38);
+  g.fillStyle(0x9c6b3f, 1); g.fillCircle(435, 346, 12);
 }
 
-function drawCell(scene) {
-  drawBaseRoom(scene, 0x343936, 0x222624);
-  const g = roomGraphics(scene);
+function drawGym(scene, layer, g) {
+  g.fillStyle(0x303632, 1); g.fillRect(0, 95, 960, 270);
+  g.fillStyle(0x1e2220, 1); g.fillRect(0, 335, 960, 107);
+  g.lineStyle(1, 0x383e3a, 0.5);
+  for (let x = 0; x < 960; x += 48) g.lineBetween(x, 335, x, 442);
 
-  // Concrete block wall.
-  g.lineStyle(1, 0x464c48, 0.28);
-  for (let y = 146; y < 390; y += 42) g.lineBetween(0, y, 390, y);
-  for (let x = 65; x < 390; x += 82) g.lineBetween(x, 118, x, 390);
+  // Rack
+  g.lineStyle(8, 0x666d68, 1); g.lineBetween(112, 166, 112, 353); g.lineBetween(270, 166, 270, 353); g.lineBetween(112, 174, 270, 174);
+  g.lineStyle(5, 0x8b938e, 1); g.lineBetween(126, 240, 257, 240);
+  g.fillStyle(0x242826, 1); g.fillCircle(137, 240, 24); g.fillCircle(247, 240, 24);
+  g.fillStyle(0x555d58, 1); g.fillRoundedRect(140, 305, 105, 18, 6); g.fillRect(187, 323, 8, 36);
 
-  // Window and bars.
-  g.fillStyle(0x76909a, 1);
-  g.fillRect(255, 151, 86, 91);
-  g.fillStyle(0xd2b36d, 0.12);
-  g.fillRect(255, 151, 86, 91);
-  g.lineStyle(4, 0x242928, 1);
-  g.strokeRect(247, 143, 102, 107);
-  [268, 291, 314, 337].forEach((x) => g.lineBetween(x, 151, x, 242));
+  // Dumbbell rack
+  g.fillStyle(0x3b413d, 1); g.fillRect(390, 282, 240, 16); g.fillRect(405, 298, 8, 52); g.fillRect(610, 298, 8, 52);
+  [420,465,510,555,600].forEach((x, i) => { g.fillStyle(0x242826,1); g.fillCircle(x, 268 - (i%2)*8, 17); g.fillRect(x-20, 264-(i%2)*8, 40, 8); });
 
-  // Bed.
-  g.fillStyle(0x171b1a, 1);
-  g.fillRect(22, 332, 170, 12);
-  g.fillRect(28, 344, 6, 90);
-  g.fillRect(179, 344, 6, 90);
-  g.fillStyle(0x777b70, 1);
-  g.fillRoundedRect(25, 300, 164, 42, 5);
-  g.fillStyle(0x596358, 1);
-  g.fillRoundedRect(30, 307, 105, 31, 4);
-  g.fillStyle(0xbab8ae, 1);
-  g.fillRoundedRect(142, 307, 40, 25, 7);
-
-  // Desk / stool.
-  g.fillStyle(0x484d48, 1);
-  g.fillRect(25, 212, 116, 10);
-  g.fillRect(35, 222, 5, 63);
-  g.fillRect(128, 222, 5, 63);
-  g.fillStyle(0x302f28, 1);
-  g.fillRect(40, 201, 38, 8);
-  g.fillStyle(0xbcb5a2, 1);
-  g.fillRect(83, 204, 31, 5);
-
-  // Sink / toilet.
-  g.fillStyle(0x838c8a, 1);
-  g.fillRoundedRect(310, 292, 56, 35, 7);
-  g.fillStyle(0x4b5553, 1);
-  g.fillEllipse(338, 309, 34, 12);
-  g.fillStyle(0x858e8d, 1);
-  g.fillRoundedRect(315, 342, 48, 57, 12);
-  g.fillStyle(0x454d4c, 1);
-  g.fillEllipse(339, 358, 31, 16);
-
-  // Photos and shelf for cozy contrast.
-  g.fillStyle(0x252a27, 1);
-  g.fillRect(35, 167, 110, 5);
-  g.fillStyle(0x8d7650, 1);
-  g.fillRect(47, 149, 10, 18);
-  g.fillStyle(0x697b83, 1);
-  g.fillRect(63, 153, 10, 14);
-  g.fillStyle(0xc9bc99, 1);
-  g.fillRect(177, 170, 29, 35);
-  g.fillStyle(0x9c927a, 1);
-  g.fillRect(215, 177, 24, 29);
-
-  roomText(scene, 28, 445, 'YOUR CELL', { color: '#656c67', fontStyle: 'bold' });
+  // Punching bag
+  g.lineStyle(4, 0x555d58, 1); g.lineBetween(785, 120, 785, 175);
+  g.fillStyle(0x6f4038, 1); g.fillRoundedRect(750, 172, 70, 135, 26);
 }
 
-function drawYard(scene) {
-  drawBaseRoom(scene, 0x88979a, 0x565d57);
-  const g = roomGraphics(scene);
-
-  // Sky.
-  g.fillStyle(0x849ba5, 1);
-  g.fillRect(0, 118, 390, 208);
-  g.fillStyle(0xb7c4c5, 0.45);
-  g.fillEllipse(74, 181, 114, 26);
-  g.fillEllipse(288, 159, 132, 22);
-
-  // Prison walls.
-  g.fillStyle(0x747a74, 1);
-  g.fillRect(0, 287, 390, 104);
-  g.lineStyle(2, 0x666c67, 0.7);
-  for (let x = 0; x < 390; x += 55) g.lineBetween(x, 287, x, 390);
-  g.lineBetween(0, 337, 390, 337);
-
-  // Fence.
-  g.lineStyle(2, 0x343a38, 0.9);
-  for (let x = 8; x < 390; x += 18) g.lineBetween(x, 254, x, 351);
-  g.lineBetween(0, 260, 390, 260);
-  g.lineBetween(0, 347, 390, 347);
-
-  // Basketball hoop.
-  g.fillStyle(0x363b38, 1);
-  g.fillRect(305, 352, 6, 105);
-  g.fillStyle(0xc7c4b8, 1);
-  g.fillRect(274, 339, 67, 42);
-  g.lineStyle(3, 0x8d5439, 1);
-  g.strokeCircle(308, 385, 18);
-
-  // Bench.
-  g.fillStyle(0x424945, 1);
-  g.fillRect(38, 474, 116, 12);
-  g.fillRect(48, 486, 7, 35);
-  g.fillRect(136, 486, 7, 35);
-
-  roomText(scene, 26, 566, 'Cold air. Open sky. Everyone watches everyone.', { color: '#c9cfca' });
-}
-
-function drawGym(scene) {
-  drawBaseRoom(scene, 0x303633, 0x202422);
-  const g = roomGraphics(scene);
-
-  // High windows.
-  for (let i = 0; i < 4; i++) {
-    g.fillStyle(0x667e88, 1);
-    g.fillRect(25 + i * 92, 142, 68, 49);
-    g.lineStyle(3, 0x242928, 1);
-    g.strokeRect(25 + i * 92, 142, 68, 49);
-  }
-
-  // Weight rack.
-  g.fillStyle(0x3f4541, 1);
-  g.fillRect(24, 256, 108, 10);
-  g.fillRect(34, 266, 6, 104);
-  g.fillRect(116, 266, 6, 104);
-  [0, 1, 2].forEach((i) => {
-    g.fillStyle(0x181b1a, 1);
-    g.fillCircle(53 + i * 28, 298, 16 - i * 2);
-    g.fillCircle(53 + i * 28, 338, 13 - i);
-  });
-
-  // Bench press.
-  g.fillStyle(0x4a514c, 1);
-  g.fillRect(195, 407, 118, 14);
-  g.fillRect(208, 421, 7, 64);
-  g.fillRect(292, 421, 7, 64);
-  g.fillStyle(0x1b1e1d, 1);
-  g.fillRect(175, 372, 160, 6);
-  g.fillCircle(180, 375, 19);
-  g.fillCircle(330, 375, 19);
-
-  // Pull-up bars.
-  g.lineStyle(6, 0x3e4541, 1);
-  g.lineBetween(326, 232, 326, 355);
-  g.lineBetween(368, 232, 368, 355);
-  g.lineBetween(326, 242, 368, 242);
-
-  roomText(scene, 25, 561, 'WEIGHTS  •  PULL-UP BARS  •  BENCH PRESS', { color: '#6e7670' });
-}
-
-function drawLibrary(scene) {
-  drawBaseRoom(scene, 0x5a5548, 0x302d27);
-  const g = roomGraphics(scene);
-
-  // Warm ceiling lights.
-  g.fillStyle(0xe0c986, 0.16);
-  g.fillEllipse(195, 235, 360, 190);
-  g.fillStyle(0xdbca96, 1);
-  g.fillRoundedRect(127, 132, 136, 7, 3);
-
-  // Bookcases.
-  [18, 267].forEach((x) => {
-    g.fillStyle(0x3d3328, 1);
-    g.fillRect(x, 183, 105, 225);
-    for (let y = 222; y <= 370; y += 49) g.fillRect(x + 6, y, 93, 6);
-    const colors = [0x75534b, 0x596a58, 0x716249, 0x4d6269, 0x846b52];
-    for (let row = 0; row < 4; row++) {
-      for (let i = 0; i < 7; i++) {
-        g.fillStyle(colors[(row + i) % colors.length], 1);
-        g.fillRect(x + 10 + i * 12, 194 + row * 49, 9, 25 + ((i + row) % 8));
+function drawLibrary(scene, layer, g) {
+  g.fillStyle(0x3a3b34, 1); g.fillRect(0, 95, 960, 270);
+  const shelves = [45, 655];
+  shelves.forEach(x0 => {
+    g.fillStyle(0x4a3b2b, 1); g.fillRect(x0, 132, 255, 208);
+    for (let y = 160; y < 330; y += 48) { g.fillStyle(0x2d261f, 1); g.fillRect(x0+10, y, 235, 7); }
+    for (let y = 136; y < 322; y += 48) {
+      for (let x = x0+17; x < x0+238; x += 23) {
+        g.fillStyle([0x7d5b45,0x566a62,0x6d4f4b,0x7a704f][((x+y)/23)|0)%4],1);
+        g.fillRect(x, y+5, 15, 20 + ((x+y)%18));
       }
     }
   });
 
-  // Reading table.
-  g.fillStyle(0x574a39, 1);
-  g.fillRoundedRect(137, 361, 116, 59, 5);
-  g.fillStyle(0x3b3228, 1);
-  g.fillRect(149, 420, 7, 70);
-  g.fillRect(234, 420, 7, 70);
-  g.fillStyle(0xb8aa83, 1);
-  g.fillRect(164, 350, 53, 7);
+  // Reading table
+  g.fillStyle(0x67523b, 1); g.fillRoundedRect(350, 285, 260, 24, 5);
+  g.fillRect(375, 309, 10, 60); g.fillRect(575, 309, 10, 60);
+  g.fillStyle(0xd6ceb3, 1); g.fillRect(445, 276, 55, 8);
+  g.fillStyle(0x8c6d4a, 1); g.fillRect(510, 272, 44, 12);
 
-  roomText(scene, 131, 293, 'QUIET AREA', { color: '#b9ae8d', fontSize: '9px' });
+  // Warm lamps
+  [390,570].forEach(x => { g.fillStyle(0xd0b06c,0.85); g.fillCircle(x,238,14); g.fillStyle(0xd8b66e,0.10); g.fillCircle(x,255,65); });
 }
 
-function drawCafeteria(scene) {
-  drawBaseRoom(scene, 0x9a998c, 0x5a5a52);
-  const g = roomGraphics(scene);
+function drawMess(scene, layer, g) {
+  g.fillStyle(0x4a4c47, 1); g.fillRect(0, 95, 960, 270);
+  g.fillStyle(0x222624, 1); g.fillRect(0, 350, 960, 92);
 
-  // Service hatch.
-  g.fillStyle(0x4b504c, 1);
-  g.fillRect(38, 161, 314, 93);
-  g.fillStyle(0x1c201f, 1);
-  g.fillRect(50, 172, 290, 61);
-  g.fillStyle(0x9da39e, 1);
-  g.fillRect(50, 236, 290, 11);
+  // Serving counter
+  g.fillStyle(0x777f7b, 1); g.fillRect(55, 150, 850, 16);
+  g.fillStyle(0x3c423f, 1); g.fillRect(55, 166, 850, 67);
+  [135,300,465,630,795].forEach(x => { g.fillStyle(0xb8b8ad,1); g.fillRoundedRect(x, 178, 80, 33, 9); });
 
-  // Tables.
-  const tables = [[87, 377], [292, 377], [87, 505], [292, 505]];
-  tables.forEach(([x, y]) => {
-    g.fillStyle(0x777d77, 1);
-    g.fillRoundedRect(x - 61, y - 20, 122, 40, 8);
-    g.fillStyle(0x444a46, 1);
-    g.fillRect(x - 4, y + 20, 8, 48);
-    g.fillStyle(0x606661, 1);
-    g.fillRoundedRect(x - 82, y - 13, 16, 28, 4);
-    g.fillRoundedRect(x + 66, y - 13, 16, 28, 4);
+  // Tables
+  [210,480,750].forEach(x => {
+    g.fillStyle(0x68706b, 1); g.fillRoundedRect(x-92, 304, 184, 20, 5);
+    g.fillRect(x-70, 324, 8, 43); g.fillRect(x+62, 324, 8, 43);
+    g.fillStyle(0x4c534f,1); g.fillRoundedRect(x-110, 346, 58, 10, 4); g.fillRoundedRect(x+52, 346, 58, 10, 4);
   });
-
-  roomText(scene, 50, 267, 'BREAKFAST 06:30  •  LUNCH 12:00  •  DINNER 17:30', { color: '#5b615d' });
 }
 
-function drawWork(scene) {
-  drawBaseRoom(scene, 0x555b57, 0x353936);
-  const g = roomGraphics(scene);
+function drawWork(scene, layer, g) {
+  g.fillStyle(0x3d413d, 1); g.fillRect(0, 95, 960, 270);
+  g.fillStyle(0x252927, 1); g.fillRect(0, 350, 960, 92);
 
-  // Industrial pipes.
-  g.lineStyle(9, 0x3b4140, 1);
-  g.lineBetween(22, 154, 365, 154);
-  g.lineBetween(342, 154, 342, 258);
-
-  // Washers/dryers.
-  [28, 140, 252].forEach((x) => {
-    g.fillStyle(0x727b78, 1);
-    g.fillRoundedRect(x, 246, 94, 125, 8);
-    g.fillStyle(0x1c2120, 1);
-    g.fillCircle(x + 47, 309, 32);
-    g.lineStyle(5, 0xa0aaa5, 0.65);
-    g.strokeCircle(x + 47, 309, 32);
-    g.fillStyle(0x242827, 1);
-    g.fillRect(x + 14, 259, 66, 13);
+  // Laundry machines
+  [70,190,310].forEach(x => {
+    g.fillStyle(0x8b918e, 1); g.fillRoundedRect(x, 155, 94, 120, 8);
+    g.fillStyle(0x343a37, 1); g.fillCircle(x+47, 220, 31);
+    g.lineStyle(4, 0xadb2af, 1); g.strokeCircle(x+47, 220, 31);
+    g.fillStyle(0x343a37,1); g.fillCircle(x+22,174,5); g.fillCircle(x+39,174,5);
   });
 
-  // Folding table and baskets.
-  g.fillStyle(0x777d77, 1);
-  g.fillRect(73, 448, 246, 13);
-  g.fillStyle(0x474c49, 1);
-  g.fillRect(89, 461, 8, 85);
-  g.fillRect(295, 461, 8, 85);
-  g.fillStyle(0x887b64, 1);
-  g.fillRoundedRect(21, 490, 70, 46, 7);
-  g.fillRoundedRect(302, 490, 68, 46, 7);
+  // Folding tables
+  g.fillStyle(0x626963, 1); g.fillRoundedRect(500, 280, 300, 22, 5);
+  g.fillRect(530, 302, 9, 64); g.fillRect(758, 302, 9, 64);
+  g.fillStyle(0xc0b9a8,1); g.fillRect(555,266,90,14); g.fillStyle(0x6b7c78,1); g.fillRect(665,260,70,20);
 
-  roomText(scene, 21, 561, 'LAUNDRY SHIFT  •  LOW PAY  •  LOW TROUBLE', { color: '#747c77' });
+  // Laundry cart
+  g.lineStyle(5, 0x555c58,1); g.strokeRect(825,245,95,85); g.fillStyle(0x777f79,1); g.fillRect(833,254,79,64);
+  g.fillStyle(0x151817,1); g.fillCircle(842,339,9); g.fillCircle(903,339,9);
 }
 
 function drawPrisoner(scene, x, y) {
   const c = scene.add.container(x, y);
+  c.setDepth(20);
 
-  const shadow = scene.add.ellipse(0, 55, 54, 13, 0x070909, 0.32);
-  const leftLeg = scene.add.rectangle(-11, 20, 15, 39, 0x3b4542).setOrigin(0.5, 0);
-  const rightLeg = scene.add.rectangle(11, 20, 15, 39, 0x3b4542).setOrigin(0.5, 0);
-  const leftShoe = scene.add.ellipse(-12, 62, 23, 9, 0x171918);
-  const rightShoe = scene.add.ellipse(12, 62, 23, 9, 0x171918);
-  const torso = scene.add.rectangle(0, -12, 45, 60, 0x5b6662).setOrigin(0.5);
-  const shirtBand = scene.add.rectangle(0, 4, 45, 4, 0x46504d);
-  const leftArm = scene.add.rectangle(-28, -9, 11, 47, 0x59635f).setRotation(0.04);
-  const rightArm = scene.add.rectangle(28, -9, 11, 47, 0x59635f).setRotation(-0.04);
-  const leftHand = scene.add.circle(-29, 14, 6, 0xb58e70);
-  const rightHand = scene.add.circle(29, 14, 6, 0xb58e70);
-  const neck = scene.add.rectangle(0, -47, 12, 12, 0xb58e70);
-  const head = scene.add.ellipse(0, -67, 34, 42, 0xbf9675);
-  const hair = scene.add.arc(0, -75, 17, 190, 350, false, 0x2b2925);
-  const leftEye = scene.add.circle(-6, -67, 1.4, 0x2a2926);
-  const rightEye = scene.add.circle(6, -67, 1.4, 0x2a2926);
-  const nose = scene.add.line(0, -62, 0, 0, 2, 6, 0x8f6e58).setLineWidth(1);
-  const id = scene.add.text(0, -14, 'B17', {
-    fontFamily: 'Arial',
-    fontSize: '7px',
-    color: '#d4d6cf',
-    fontStyle: 'bold',
-  }).setOrigin(0.5);
+  const shadow = scene.add.ellipse(0, 30, 52, 12, 0x080a09, 0.38);
+  const leftLeg = scene.add.rectangle(-10, 5, 15, 38, 0x35413e).setOrigin(0.5, 0);
+  const rightLeg = scene.add.rectangle(10, 5, 15, 38, 0x35413e).setOrigin(0.5, 0);
+  const leftShoe = scene.add.ellipse(-11, 44, 25, 10, 0x171a19);
+  const rightShoe = scene.add.ellipse(11, 44, 25, 10, 0x171a19);
+  const torso = scene.add.rectangle(0, -20, 42, 56, 0x65736c).setOrigin(0.5);
+  const leftArm = scene.add.rectangle(-27, -17, 12, 48, 0x65736c).setOrigin(0.5, 0.15);
+  const rightArm = scene.add.rectangle(27, -17, 12, 48, 0x65736c).setOrigin(0.5, 0.15);
+  const neck = scene.add.rectangle(0, -50, 14, 12, 0xb28e70);
+  const head = scene.add.circle(0, -68, 21, 0xb99373);
+  const hair = scene.add.ellipse(0, -82, 39, 17, 0x2b2926);
+  const ear = scene.add.circle(20, -67, 4, 0xa98267);
+  const eye = scene.add.circle(7, -68, 1.7, 0x1b1a18);
+  const brow = scene.add.rectangle(7, -73, 9, 2, 0x3a302a).setRotation(-0.08);
+  const nose = scene.add.rectangle(11, -63, 6, 2, 0x8d6b55);
+  const idPatch = scene.add.rectangle(9, -24, 21, 10, 0x2c3431);
+  const idText = scene.add.text(9, -24, 'B17', { fontFamily:'Arial', fontSize:'7px', color:'#d6d8d2', fontStyle:'bold' }).setOrigin(0.5);
 
-  c.add([
-    shadow, leftLeg, rightLeg, leftShoe, rightShoe, torso, shirtBand,
-    leftArm, rightArm, leftHand, rightHand, neck, head, hair,
-    leftEye, rightEye, nose, id,
-  ]);
-
-  c.setSize(72, 145);
+  c.add([shadow,leftLeg,rightLeg,leftShoe,rightShoe,torso,leftArm,rightArm,neck,head,hair,ear,eye,brow,nose,idPatch,idText]);
+  c.bodyParts = { leftLeg, rightLeg, leftArm, rightArm };
   return c;
+}
+
+function animateWalk(player) {
+  const phase = performance.now() / 95;
+  const swing = Math.sin(phase) * 0.24;
+  player.bodyParts.leftLeg.rotation = swing;
+  player.bodyParts.rightLeg.rotation = -swing;
+  player.bodyParts.leftArm.rotation = -swing * 0.8;
+  player.bodyParts.rightArm.rotation = swing * 0.8;
 }
